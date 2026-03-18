@@ -100,10 +100,22 @@ function getVideoThumbnail(file) {
   });
 }
 
+// Safari/iOS는 canvas.toBlob('image/webp')를 지원하지 않아 PNG로 폴백함
+// → 런타임에서 실제 WebP 인코딩 가능 여부를 감지
+const CAN_ENCODE_WEBP = (() => {
+  try {
+    const c = document.createElement('canvas');
+    c.width = 1; c.height = 1;
+    return c.toDataURL('image/webp').startsWith('data:image/webp');
+  } catch {
+    return false;
+  }
+})();
+
 const STATIC_FORMATS = [
-  { id: 'jpeg', label: 'JPG'  },
-  { id: 'png',  label: 'PNG'  },
-  { id: 'webp', label: 'WebP' },
+  { id: 'jpeg', label: 'JPG' },
+  { id: 'png',  label: 'PNG' },
+  ...(CAN_ENCODE_WEBP ? [{ id: 'webp', label: 'WebP' }] : []),
 ];
 
 // FFmpeg core URLs (shared binary, separate instances per video)
@@ -243,15 +255,18 @@ export default function App() {
       ctxJ.drawImage(img, 0, 0);
 
       const sizes = { original: originalSize };
+      const total = CAN_ENCODE_WEBP ? 3 : 2;
       let done = 0;
       const check = () => {
-        if (++done === 3) {
+        if (++done === total) {
           setItems(prev => prev.map(it => it.id === id ? { ...it, formatSizes: { ...sizes } } : it));
         }
       };
       canvasJpeg.toBlob(b => { sizes.jpeg = b?.size ?? 0; check(); }, 'image/jpeg', q);
       canvas.toBlob(b     => { sizes.png  = b?.size ?? 0; check(); }, 'image/png');
-      canvas.toBlob(b     => { sizes.webp = b?.size ?? 0; check(); }, 'image/webp', q);
+      if (CAN_ENCODE_WEBP) {
+        canvas.toBlob(b => { sizes.webp = b?.size ?? 0; check(); }, 'image/webp', q);
+      }
     };
     img.src = imgSrc;
   }, []);
