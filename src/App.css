@@ -806,23 +806,8 @@ body {
   min-height: 0;
 }
 
-/* 줌/패닝 컨테이너 — 두 이미지를 동일하게 변환 */
-.comparator-zoom-content {
-  position: absolute;
-  inset: 0;
-}
-
-.comparator-compressed-layer {
-  position: absolute;
-  inset: 0;
-}
-
+/* 이미지 비교 뷰어 이미지 — JS 인라인 스타일로 제어하므로 CSS 클래스 최소화 */
 .comparator-img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
   pointer-events: none;
   display: block;
 }

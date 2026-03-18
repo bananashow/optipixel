@@ -7,6 +7,9 @@ import fs from 'fs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  server: {
+    host: true,
+  },
   plugins: [
     // Vite transform 파이프라인을 거치지 않고 /ffmpeg/* 파일을 직접 서빙
     {

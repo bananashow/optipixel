@@ -81,12 +81,23 @@ export default function PreviewModal({ item, onClose, onApply }) {
   useEffect(() => {
     const el = comparatorRef.current;
     if (!el) return;
+
+    // ResizeObserver 지연 대비: 마운트 직후 즉시 측정
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      if (r.width  > 1) setCW(r.width);
+      if (r.height > 1) setCH(r.height);
+    };
+    measure();
+    // 레이아웃 확정 후 재측정 (모바일에서 레이아웃이 늦을 수 있음)
+    const t = setTimeout(measure, 100);
+
     const ro = new ResizeObserver(([entry]) => {
       setCW(entry.contentRect.width  || 1);
       setCH(entry.contentRect.height || 1);
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => { clearTimeout(t); ro.disconnect(); };
   }, []);
 
   // ── Pan clamping ───────────────────────────────────────────────────────────
@@ -279,21 +290,27 @@ export default function PreviewModal({ item, onClose, onApply }) {
   // ── Cursor style ───────────────────────────────────────────────────────────
   const cursor = isGrabbing ? 'grabbing' : zoom > 1 ? 'grab' : 'col-resize';
 
-  // ── Image generation (unchanged logic) ────────────────────────────────────
+  // ── Image generation ─────────────────────────────────────────────────────
+  // 풀 해상도 캔버스 사용 → 실제 다운로드 파일과 동일한 품질/크기 표현
+  // 초기 줌은 아래 useEffect에서 자동 설정해 모바일에서도 아티팩트가 보이도록 함
   const buildCanvases = useCallback(() => new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+
       const canvas = document.createElement('canvas');
-      canvas.width  = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+      canvas.width  = w;
+      canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0);
 
+      // JPEG용: 다크 배경 위에 그려 투명 채널 처리
       const cJpeg = document.createElement('canvas');
-      cJpeg.width  = canvas.width;
-      cJpeg.height = canvas.height;
+      cJpeg.width  = w;
+      cJpeg.height = h;
       const ctxJ  = cJpeg.getContext('2d');
       ctxJ.fillStyle = '#0a0a0f';
-      ctxJ.fillRect(0, 0, cJpeg.width, cJpeg.height);
+      ctxJ.fillRect(0, 0, w, h);
       ctxJ.drawImage(img, 0, 0);
 
       resolve({ canvas, cJpeg });
@@ -312,8 +329,9 @@ export default function PreviewModal({ item, onClose, onApply }) {
       previewSrc.toBlob((blob) => {
         if (blob) {
           if (prevBlobRef.current) URL.revokeObjectURL(prevBlobRef.current);
-          const url = URL.createObjectURL(blob);
-          prevBlobRef.current = url;
+          // iOS Safari image decode cache 우회: fragment 추가로 매번 새로운 URL 인식
+          const url = URL.createObjectURL(blob) + '#' + Date.now();
+          prevBlobRef.current = url.split('#')[0]; // revoke 시엔 fragment 없는 URL 사용
           setBlobUrl(url);
           setPreviewSize(blob.size);
           setFormatSizes(prev => ({ ...prev, [fmt]: blob.size }));
@@ -340,6 +358,21 @@ export default function PreviewModal({ item, onClose, onApply }) {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── 초기 줌 자동 설정 (1회만 실행) ──────────────────────────────────────
+  // 풀 해상도 이미지에서 JPEG 8×8 블록이 화면에서 최소 2 CSS px로 보이도록
+  // 공식: zoom = (2 × img_width) / (8 × container_width)
+  const initZoomSetRef = useRef(false);
+  useEffect(() => {
+    if (initZoomSetRef.current) return;     // 이미 설정됨 → 재실행 방지
+    const imgW       = item.dimensions?.width || 0;
+    const containerW = cW > 1 ? cW : 0;
+    if (imgW === 0 || containerW === 0) return;
+    initZoomSetRef.current = true;
+    const targetZoom = (2 * imgW) / (8 * containerW);
+    const initZoom   = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, targetZoom));
+    if (initZoom > 1) setZoomS(initZoom);
+  }, [cW, item.dimensions?.width]);
 
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return; }
@@ -408,43 +441,80 @@ export default function PreviewModal({ item, onClose, onApply }) {
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
         >
-          {/* 줌/패닝 컨테이너 — 두 이미지 모두 이 안에서 동일하게 변환됨
-              zoom=1 + pan=0 일 때 transform 미적용: Safari에서 identity transform도
-              새 stacking context를 만들어 -webkit-mask에 영향을 줄 수 있음 */}
-          <div
-            className="comparator-zoom-content"
-            style={zoom !== 1 || pan.x !== 0 || pan.y !== 0 ? {
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              transformOrigin: 'center',
-            } : undefined}
-          >
-            <img
-              className="comparator-img"
-              src={item.originalPreview}
-              alt="원본"
-              draggable={false}
-            />
+          {/*
+            overflow:hidden + width 슬라이싱 방식 (Safari 완전 호환)
+            [배경] 압축 이미지 전체 표시 / [오버레이] 원본 이미지를 왼쪽 clipPct%만 표시
+          */}
+          {(() => {
+            // object-fit: contain 을 JS로 직접 계산 (Safari CSS 의존 없음)
+            const imgW = item.dimensions?.width  || 0;
+            const imgH = item.dimensions?.height || 0;
+            const canFit = cW > 1 && cH > 1 && imgW > 0 && imgH > 0;
 
-            {/* 압축 이미지 — sliderPos% 기준 오른쪽만 표시
-                clip-path 대신 -webkit-mask 사용:
-                Safari에서 transform된 부모 안의 clip-path가 동작하지 않는 버그 대응 */}
-            {blobUrl && (
-              <div
-                className="comparator-compressed-layer"
-                style={{
-                  WebkitMask: `linear-gradient(to right, transparent ${sliderPos}%, #000 ${sliderPos}%)`,
-                  mask: `linear-gradient(to right, transparent ${sliderPos}%, #000 ${sliderPos}%)`,
-                }}
-              >
-                <img
-                  className="comparator-img"
-                  src={blobUrl}
-                  alt="압축 미리보기"
-                  draggable={false}
-                />
-              </div>
-            )}
-          </div>
+            let imgLeft = 0, imgTop = 0, imgFitW = cW, imgFitH = cH;
+            let originX = cW / 2, originY = cH / 2;
+
+            if (canFit) {
+              const scale = Math.min(cW / imgW, cH / imgH);
+              imgFitW  = imgW * scale;
+              imgFitH  = imgH * scale;
+              imgLeft  = (cW - imgFitW) / 2;
+              imgTop   = (cH - imgFitH) / 2;
+              originX  = cW / 2 - imgLeft;
+              originY  = cH / 2 - imgTop;
+            }
+
+            const hasZoom    = zoom !== 1 || pan.x !== 0 || pan.y !== 0;
+            const zTransform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+            const zOrigin    = `${originX}px ${originY}px`;
+
+            // 두 이미지에 공통으로 적용할 스타일
+            const imgStyle = {
+              position: 'absolute',
+              display: 'block',
+              pointerEvents: 'none',
+              ...(canFit ? {
+                top: imgTop,
+                left: imgLeft,
+                width: imgFitW,
+                height: imgFitH,
+              } : {
+                top: 0, left: 0,
+                width: '100%', height: '100%',
+                objectFit: 'contain',
+              }),
+              ...(hasZoom ? { transform: zTransform, transformOrigin: zOrigin } : {}),
+            };
+
+            // 오버레이 클리핑: 뷰포트 기준 dividerViewportPct% (줌/패닝 반영)
+            const clipPct = Math.max(0, Math.min(100, dividerViewportPct));
+
+            return (
+              <>
+                {/* 배경: 압축 이미지 (전체 표시) */}
+                {blobUrl
+                  ? <img src={blobUrl}            alt="압축 미리보기" draggable={false} style={imgStyle} />
+                  : <img src={item.originalPreview} alt="로딩 중"    draggable={false} style={imgStyle} />
+                }
+
+                {/* 오버레이: 원본 이미지 (왼쪽 clipPct% 만큼만 표시) */}
+                <div style={{
+                  position: 'absolute',
+                  left: 0, top: 0,
+                  width: `${clipPct}%`,
+                  height: '100%',
+                  overflow: 'hidden',
+                }}>
+                  <img
+                    src={item.originalPreview}
+                    alt="원본"
+                    draggable={false}
+                    style={imgStyle}
+                  />
+                </div>
+              </>
+            );
+          })()}
 
           {/* 생성 중 오버레이 */}
           {isGenerating && (
