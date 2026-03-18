@@ -551,7 +551,7 @@ export default function App() {
                 <input
                   type="range"
                   min={1}
-                  max={90}
+                  max={99}
                   value={100 - quality}
                   onChange={e => setQuality(100 - Number(e.target.value))}
                   className="quality-slider"
