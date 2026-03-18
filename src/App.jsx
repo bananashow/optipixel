@@ -394,18 +394,23 @@ export default function App() {
       return;
     }
 
-    if (downloadFormat === 'original') {
-      const ext  = item.file.name.split('.').pop();
+    const extMap = { original: item.file.name.split('.').pop(), jpeg: 'jpg', png: 'png', webp: 'webp' };
+    // 이미 원본과 같은 포맷이면 재인코딩 없이 직접 사용 (이중 손실 방지)
+    const inputMime = item.file.type; // 예: 'image/jpeg'
+    const sameAsOriginal = downloadFormat === 'original'
+      || inputMime === `image/${downloadFormat}`
+      || (inputMime === 'image/jpeg' && downloadFormat === 'jpeg');
+
+    if (sameAsOriginal) {
       const link = document.createElement('a');
       link.href     = item.compressedPreview;
-      link.download = `${baseName}_compressed.${ext}`;
+      link.download = `${baseName}_compressed.${extMap[downloadFormat] || extMap.original}`;
       link.click();
       return;
     }
-    const extMap = { jpeg: 'jpg', png: 'png', webp: 'webp' };
-    const blob   = await convertToFormat(item.compressedPreview, downloadFormat, quality / 100);
-    const url    = URL.createObjectURL(blob);
-    const link   = document.createElement('a');
+    const blob = await convertToFormat(item.compressedPreview, downloadFormat, quality / 100);
+    const url  = URL.createObjectURL(blob);
+    const link = document.createElement('a');
     link.href     = url;
     link.download = `${baseName}_compressed.${extMap[downloadFormat]}`;
     link.click();
@@ -424,12 +429,18 @@ export default function App() {
         if (item.mediaType === 'video') {
           blob = item.compressedFile;
           ext  = 'mp4';
-        } else if (downloadFormat === 'original') {
-          blob = item.compressedFile;
-          ext  = item.file.name.split('.').pop();
         } else {
-          blob = await convertToFormat(item.compressedPreview, downloadFormat, quality / 100);
-          ext  = extMap[downloadFormat];
+          const inputMime     = item.file.type;
+          const sameAsOriginal = downloadFormat === 'original'
+            || inputMime === `image/${downloadFormat}`
+            || (inputMime === 'image/jpeg' && downloadFormat === 'jpeg');
+          if (sameAsOriginal) {
+            blob = item.compressedFile;
+            ext  = item.file.name.split('.').pop();
+          } else {
+            blob = await convertToFormat(item.compressedPreview, downloadFormat, quality / 100);
+            ext  = extMap[downloadFormat];
+          }
         }
         const baseName = item.file.name.replace(/\.[^.]+$/, '');
         zip.file(`${baseName}_compressed.${ext}`, blob);
@@ -460,8 +471,12 @@ export default function App() {
   const allSameExt          = imageItems.length > 0 && imageItems.every(it => getExtLabel(it.file) === getExtLabel(imageItems[0].file));
   const originalFormatLabel = allSameExt ? getExtLabel(imageItems[0]?.file) : '원본';
 
+  // 원본 형식이 STATIC_FORMATS 중 하나와 겹치면 'original' 버튼 제거 (JPG 중복 방지)
+  const originalMatchesStatic = STATIC_FORMATS.some(
+    f => f.label.toLowerCase() === originalFormatLabel.toLowerCase()
+  );
   const FORMATS = [
-    { id: 'original', label: originalFormatLabel },
+    ...(originalMatchesStatic ? [] : [{ id: 'original', label: originalFormatLabel }]),
     ...STATIC_FORMATS,
   ];
 
@@ -472,9 +487,15 @@ export default function App() {
     return acc;
   }, {});
 
-  const totalOriginalSize   = items.reduce((s, it) => s + it.file.size, 0);
-  const totalCompressedSize = doneItems.reduce((s, it) => s + (it.compressedFile?.size || 0), 0);
-  const totalSaving         = getSavingPercent(totalOriginalSize, totalCompressedSize);
+  const totalOriginalSize = items.reduce((s, it) => s + it.file.size, 0);
+
+  // 선택된 다운로드 포맷 기준 총 압축 크기 (이미지 포맷별 + 비디오는 원본 유지)
+  const totalCompressedSize = doneItems.reduce((s, it) => {
+    if (it.mediaType === 'video') return s + (it.compressedFile?.size || 0);
+    const fmtSize = it.formatSizes?.[downloadFormat];
+    return s + (fmtSize ?? it.compressedFile?.size ?? 0);
+  }, 0);
+  const totalSaving = getSavingPercent(totalOriginalSize, totalCompressedSize);
 
   const compressLabel = [
     imageItems.length > 0 ? `이미지 ${imageItems.length}장` : '',
@@ -616,11 +637,15 @@ export default function App() {
                       </div>
                     )}
 
-                    {item.status === 'done' && (
-                      <div className="file-card-badge">
-                        -{getSavingPercent(item.file.size, item.compressedFile.size)}%
-                      </div>
-                    )}
+                    {item.status === 'done' && (() => {
+                      const displaySize = item.formatSizes[downloadFormat] ?? item.compressedFile.size;
+                      const pct = getSavingPercent(item.file.size, displaySize);
+                      return (
+                        <div className={`file-card-badge${pct < 0 ? ' file-card-badge--warn' : ''}`}>
+                          {pct < 0 ? `+${Math.abs(pct)}%` : `-${pct}%`}
+                        </div>
+                      );
+                    })()}
                     {item.status === 'error' && (
                       <div className="file-card-badge file-card-badge--error">오류</div>
                     )}
@@ -652,12 +677,18 @@ export default function App() {
                     <p className="file-card-name" title={item.file.name}>{item.file.name}</p>
                     <div className="file-card-sizes">
                       <span className="size-original">{formatBytes(item.file.size)}</span>
-                      {item.status === 'done' && (
-                        <>
-                          <span className="size-arrow">→</span>
-                          <span className="size-compressed">{formatBytes(item.compressedFile.size)}</span>
-                        </>
-                      )}
+                      {item.status === 'done' && (() => {
+                        const displaySize = item.formatSizes[downloadFormat] ?? item.compressedFile.size;
+                        const isLarger = displaySize > item.file.size;
+                        return (
+                          <>
+                            <span className="size-arrow">→</span>
+                            <span className={`size-compressed${isLarger ? ' size-compressed--warn' : ''}`}>
+                              {formatBytes(displaySize)}
+                            </span>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -683,18 +714,25 @@ export default function App() {
                 <div className="format-download">
                   {doneImageItems.length > 0 && (
                     <div className="format-selector">
-                      {FORMATS.map(f => (
-                        <button
-                          key={f.id}
-                          className={`format-btn ${downloadFormat === f.id ? 'active' : ''}`}
-                          onClick={() => setDownloadFormat(f.id)}
-                        >
-                          <span className="format-btn-label">{f.label}</span>
-                          {totalFormatSizes[f.id] != null && (
-                            <span className="format-btn-size">{formatBytes(totalFormatSizes[f.id])}</span>
-                          )}
-                        </button>
-                      ))}
+                      {FORMATS.map(f => {
+                        const size = totalFormatSizes[f.id];
+                        const isLargerThanOriginal = size != null && size > totalOriginalSize;
+                        return (
+                          <button
+                            key={f.id}
+                            className={`format-btn ${downloadFormat === f.id ? 'active' : ''}`}
+                            onClick={() => setDownloadFormat(f.id)}
+                            title={f.id === 'png' ? 'PNG는 무손실 형식으로 사진 파일은 원본보다 클 수 있습니다' : undefined}
+                          >
+                            <span className="format-btn-label">{f.label}</span>
+                            {size != null && (
+                              <span className={`format-btn-size${isLargerThanOriginal ? ' format-btn-size--warn' : ''}`}>
+                                {isLargerThanOriginal ? '↑' : ''}{formatBytes(size)}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                   <button className="btn-download" onClick={downloadZip} disabled={isZipping}>

@@ -325,6 +325,10 @@ body {
   background: #dc2626;
 }
 
+.file-card-badge--warn {
+  background: #d97706;
+}
+
 .file-card-info {
   padding: 10px 12px 10px;
 }
@@ -357,6 +361,10 @@ body {
 
 .size-compressed {
   color: #34d399;
+}
+
+.size-compressed--warn {
+  color: #fbbf24;
 }
 
 .file-card-dl {
@@ -465,8 +473,16 @@ body {
   line-height: 1;
 }
 
+.format-btn-size--warn {
+  color: #f59e0b;
+}
+
 .format-btn.active .format-btn-size {
   color: #7c3aed;
+}
+
+.format-btn.active .format-btn-size--warn {
+  color: #fbbf24;
 }
 
 .btn-download {
