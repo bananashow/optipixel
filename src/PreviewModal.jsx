@@ -146,7 +146,7 @@ export default function PreviewModal({ item, onClose, onApply }) {
   const handleMouseMove  = (e) => { if (isSliderDragging.current) updateSlider(e.clientX); };
   const handleMouseUp    = ()  => { isSliderDragging.current = false; };
   const handleTouchStart = (e) => { isSliderDragging.current = true;  updateSlider(e.touches[0].clientX); };
-  const handleTouchMove  = (e) => { e.preventDefault(); updateSlider(e.touches[0].clientX); };
+  const handleTouchMove  = (e) => { updateSlider(e.touches[0].clientX); };
 
   const saving = previewSize ? getSavingPercent(item.file.size, previewSize) : null;
 
@@ -188,6 +188,7 @@ export default function PreviewModal({ item, onClose, onApply }) {
         <div
           className="preview-comparator"
           ref={comparatorRef}
+          style={{ touchAction: 'none' }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}

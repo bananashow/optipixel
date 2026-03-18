@@ -486,8 +486,9 @@ export default function App() {
           {items.length === 0 ? (
             <>
               <div className="drop-zone-icon">🖼️</div>
-              <p className="drop-zone-title">이미지 또는 동영상을 드래그하거나 클릭해서 업로드</p>
-              <p className="drop-zone-sub">JPG, PNG, WebP · MP4, MOV, WebM · 여러 파일 동시 선택 가능</p>
+              <p className="drop-zone-title drop-zone-title--desktop">이미지 또는 동영상을 드래그하거나 클릭해서 업로드</p>
+              <p className="drop-zone-title drop-zone-title--mobile">탭해서 파일 선택</p>
+              <p className="drop-zone-sub">JPG, PNG, WebP · MP4, MOV, WebM · 여러 파일 동시 선택</p>
             </>
           ) : (
             <p className="drop-zone-add">+ 파일 추가</p>
@@ -647,7 +648,7 @@ export default function App() {
 
                   {item.status === 'done' && (
                     <button className="file-card-dl" onClick={() => downloadSingle(item)} title="개별 다운로드">
-                      ↓
+                      ↓ 저장
                     </button>
                   )}
                 </div>

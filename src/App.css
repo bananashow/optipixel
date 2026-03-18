@@ -100,6 +100,20 @@ body {
   transition: color 0.15s;
 }
 
+/* 드롭존 텍스트: 터치/데스크탑 분기 */
+.drop-zone-title--mobile {
+  display: none;
+}
+
+@media (hover: none) {
+  .drop-zone-title--desktop {
+    display: none;
+  }
+  .drop-zone-title--mobile {
+    display: block;
+  }
+}
+
 .drop-zone:hover .drop-zone-add {
   color: #a78bfa;
 }
@@ -140,6 +154,7 @@ body {
 .quality-slider {
   width: 100%;
   -webkit-appearance: none;
+  appearance: none;
   height: 4px;
   border-radius: 2px;
   background: #2d2d3d;
@@ -955,14 +970,62 @@ body {
 }
 
 /* ── Responsive ── */
-@media (max-width: 600px) {
+
+/* 터치 기기: 미리보기 버튼 항상 표시 */
+@media (hover: none) {
+  .file-card-preview-btn {
+    opacity: 1;
+  }
+}
+
+/* 노치/홈바 있는 기기 safe area */
+@supports (padding: env(safe-area-inset-bottom)) {
+  .app-main {
+    padding-bottom: max(60px, calc(40px + env(safe-area-inset-bottom)));
+  }
+  .action-bar {
+    padding-bottom: max(20px, calc(12px + env(safe-area-inset-bottom)));
+  }
+}
+
+/* ── 태블릿 (769px ~ 1024px) ── */
+@media (max-width: 1024px) {
+  .app-main {
+    padding: 0 24px 60px;
+  }
+}
+
+/* ── 소형 태블릿 / 대형 폰 (최대 768px) ── */
+@media (max-width: 768px) {
+  .app-header {
+    padding: 28px 20px 20px;
+  }
+
+  .app-header h1 {
+    font-size: 1.75rem;
+  }
+
+  .app-main {
+    padding: 0 16px 60px;
+  }
+
+  .drop-zone {
+    padding: 48px 28px;
+  }
+
   .files-grid {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 12px;
   }
 
   .controls-bar {
     flex-direction: column;
     align-items: stretch;
+    gap: 14px;
+  }
+
+  .quality-control {
+    min-width: unset;
   }
 
   .controls-actions {
@@ -973,23 +1036,258 @@ body {
   .controls-actions .btn-ghost {
     flex: 1;
     justify-content: center;
+    min-height: 44px;
   }
 
   .action-bar {
     flex-direction: column;
     align-items: stretch;
+    gap: 16px;
   }
 
   .format-download {
     flex-direction: column;
     align-items: stretch;
+    gap: 10px;
   }
 
   .format-selector {
-    justify-content: center;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+
+  .format-selector::-webkit-scrollbar {
+    display: none;
+  }
+
+  .format-btn {
+    flex-shrink: 0;
   }
 
   .btn-download {
     justify-content: center;
+    width: 100%;
+    padding: 13px 24px;
+    font-size: 1rem;
+    min-height: 48px;
+  }
+
+  /* 미리보기 모달: 바텀시트로 슬라이드업 */
+  .preview-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .preview-modal {
+    max-width: 100%;
+    height: 90vh;
+    border-radius: 20px 20px 0 0;
+  }
+}
+
+/* ── 모바일 폰 (최대 480px) ── */
+@media (max-width: 480px) {
+  .app-header {
+    padding: 18px 14px 14px;
+  }
+
+  .app-header h1 {
+    font-size: 1.45rem;
+  }
+
+  .logo-mark {
+    font-size: 1.8rem;
+  }
+
+  .app-header p {
+    font-size: 0.78rem;
+  }
+
+  .app-main {
+    padding: 0 10px 60px;
+  }
+
+  .drop-zone {
+    padding: 30px 14px;
+    border-radius: 14px;
+  }
+
+  .drop-zone-icon {
+    font-size: 2rem;
+    margin-bottom: 10px;
+  }
+
+  .drop-zone-title {
+    font-size: 0.9rem;
+  }
+
+  .drop-zone-sub {
+    font-size: 0.73rem;
+  }
+
+  .files-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  /* 터치 타겟 최소 44px 확보 */
+  .file-card-remove {
+    width: 28px;
+    height: 28px;
+    top: 5px;
+    right: 5px;
+    font-size: 1rem;
+  }
+
+  .file-card-preview-btn {
+    width: 30px;
+    height: 30px;
+    font-size: 0.8rem;
+    bottom: 5px;
+    right: 5px;
+  }
+
+  .file-card-dl {
+    padding: 10px;
+    font-size: 0.85rem;
+  }
+
+  /* 슬라이더 thumb 크게: 손가락으로 잡기 편하게 */
+  .quality-slider {
+    height: 6px;
+  }
+
+  .quality-slider::-webkit-slider-thumb {
+    width: 24px;
+    height: 24px;
+  }
+
+  .quality-slider::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #a78bfa;
+    border: 2px solid #0f0f13;
+    cursor: pointer;
+  }
+
+  .controls-bar {
+    padding: 14px 14px;
+    gap: 12px;
+  }
+
+  .controls-actions {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .controls-actions .btn-primary,
+  .controls-actions .btn-ghost {
+    width: 100%;
+    justify-content: center;
+    padding: 13px 20px;
+    font-size: 0.9rem;
+    flex: unset;
+  }
+
+  .ffmpeg-hint {
+    justify-content: center;
+    font-size: 0.75rem;
+  }
+
+  .action-bar {
+    padding: 14px;
+    gap: 12px;
+  }
+
+  .saving-percent {
+    font-size: 1.4rem;
+  }
+
+  .saving-detail {
+    font-size: 0.78rem;
+  }
+
+  .format-btn {
+    padding: 7px 10px;
+    min-width: 54px;
+  }
+
+  .btn-download {
+    padding: 13px 20px;
+    font-size: 0.92rem;
+  }
+
+  /* 미리보기 모달 모바일 최적화 */
+  .preview-modal {
+    height: 92vh;
+  }
+
+  .preview-modal-header {
+    padding: 12px 14px 10px;
+  }
+
+  .preview-modal-title {
+    font-size: 0.88rem;
+    gap: 8px;
+  }
+
+  .preview-modal-filename {
+    max-width: 150px;
+    font-size: 0.7rem;
+  }
+
+  .preview-modal-close {
+    width: 34px;
+    height: 34px;
+  }
+
+  .preview-format-tabs {
+    padding: 8px 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .preview-format-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .preview-format-tab {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    min-width: 58px;
+  }
+
+  /* 비교 핸들: 손가락으로 잡기 편하게 */
+  .comparator-handle {
+    width: 48px;
+    height: 48px;
+  }
+
+  .preview-modal-footer {
+    padding: 10px 14px 14px;
+  }
+
+  .preview-footer-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .preview-size-info {
+    justify-content: center;
+  }
+
+  .preview-apply-btn {
+    width: 100%;
+    padding: 12px 18px;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
   }
 }
