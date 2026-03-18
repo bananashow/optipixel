@@ -105,8 +105,18 @@ const STATIC_FORMATS = [
   { id: 'webp', label: 'WebP' },
 ];
 
-// FFmpeg singleton — shared across renders
-let ffmpegInstance  = null;
+// FFmpeg core URLs (shared binary, separate instances per video)
+let ffmpegCoreBase = null;
+
+function getFFmpegBase() {
+  if (!ffmpegCoreBase) {
+    ffmpegCoreBase = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+  }
+  return ffmpegCoreBase;
+}
+
+// FFmpeg singleton — 비디오는 직렬 처리로 메모리 효율 확보
+let ffmpegInstance    = null;
 let ffmpegLoadPromise = null;
 
 function loadFFmpeg() {
@@ -115,7 +125,7 @@ function loadFFmpeg() {
 
   ffmpegLoadPromise = (async () => {
     const ffmpeg = new FFmpeg();
-    const base   = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+    const base   = getFFmpegBase();
     await ffmpeg.load({
       coreURL: `${base}/ffmpeg/ffmpeg-core.js`,
       wasmURL: `${base}/ffmpeg/ffmpeg-core.wasm`,
@@ -237,8 +247,8 @@ export default function App() {
         : it
     ));
 
-    // ── Images ──
-    for (const item of imageItems) {
+    // ── Images (병렬 처리) ──
+    await Promise.all(imageItems.map(async (item) => {
       try {
         const options = {
           maxSizeMB: (item.file.size / 1024 / 1024) * (quality / 100),
@@ -262,9 +272,9 @@ export default function App() {
           it.id === item.id ? { ...it, status: 'error' } : it
         ));
       }
-    }
+    }));
 
-    // ── Videos ──
+    // ── Videos (직렬 처리 — FFmpeg WASM 메모리 효율) ──
     if (videoItems.length > 0) {
       let ffmpeg;
       try {
