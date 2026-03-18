@@ -408,13 +408,15 @@ export default function PreviewModal({ item, onClose, onApply }) {
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
         >
-          {/* 줌/패닝 컨테이너 — 두 이미지 모두 이 안에서 동일하게 변환됨 */}
+          {/* 줌/패닝 컨테이너 — 두 이미지 모두 이 안에서 동일하게 변환됨
+              zoom=1 + pan=0 일 때 transform 미적용: Safari에서 identity transform도
+              새 stacking context를 만들어 -webkit-mask에 영향을 줄 수 있음 */}
           <div
             className="comparator-zoom-content"
-            style={{
+            style={zoom !== 1 || pan.x !== 0 || pan.y !== 0 ? {
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
               transformOrigin: 'center',
-            }}
+            } : undefined}
           >
             <img
               className="comparator-img"
@@ -423,11 +425,16 @@ export default function PreviewModal({ item, onClose, onApply }) {
               draggable={false}
             />
 
-            {/* 압축 이미지 — sliderPos% 기준 오른쪽만 표시 */}
+            {/* 압축 이미지 — sliderPos% 기준 오른쪽만 표시
+                clip-path 대신 -webkit-mask 사용:
+                Safari에서 transform된 부모 안의 clip-path가 동작하지 않는 버그 대응 */}
             {blobUrl && (
               <div
                 className="comparator-compressed-layer"
-                style={{ clipPath: `inset(0 0 0 ${sliderPos}%)` }}
+                style={{
+                  WebkitMask: `linear-gradient(to right, transparent ${sliderPos}%, #000 ${sliderPos}%)`,
+                  mask: `linear-gradient(to right, transparent ${sliderPos}%, #000 ${sliderPos}%)`,
+                }}
               >
                 <img
                   className="comparator-img"

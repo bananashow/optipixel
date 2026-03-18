@@ -810,7 +810,6 @@ body {
 .comparator-zoom-content {
   position: absolute;
   inset: 0;
-  will-change: transform;
 }
 
 .comparator-compressed-layer {
