@@ -21,10 +21,28 @@ export default function App() {
   const [compressedFile, setCompressedFile] = useState(null);
   const [compressedPreview, setCompressedPreview] = useState(null);
   const [quality, setQuality] = useState(50);
+  const [downloadFormat, setDownloadFormat] = useState('original');
+  const [formatSizes, setFormatSizes] = useState({});
   const [isCompressing, setIsCompressing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [imageDimensions, setImageDimensions] = useState(null);
   const fileInputRef = useRef(null);
+
+  const getOriginalExt = (file) => {
+    if (!file) return '원본';
+    const mime = file.type;
+    if (mime === 'image/jpeg') return 'JPG';
+    if (mime === 'image/png')  return 'PNG';
+    if (mime === 'image/webp') return 'WebP';
+    return file.name.split('.').pop().toUpperCase();
+  };
+
+  const FORMATS = [
+    { id: 'original', label: getOriginalExt(originalFile) },
+    { id: 'jpeg',     label: 'JPG'  },
+    { id: 'png',      label: 'PNG'  },
+    { id: 'webp',     label: 'WebP' },
+  ];
 
   const handleFile = useCallback((file) => {
     if (!file || !file.type.startsWith('image/')) return;
@@ -61,9 +79,38 @@ export default function App() {
     handleFile(e.target.files[0]);
   };
 
+  const measureFormatSizes = (imgSrc, originalSize, q) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+
+      const canvasJpeg = document.createElement('canvas');
+      canvasJpeg.width  = img.naturalWidth;
+      canvasJpeg.height = img.naturalHeight;
+      const ctxJpeg = canvasJpeg.getContext('2d');
+      ctxJpeg.fillStyle = '#ffffff';
+      ctxJpeg.fillRect(0, 0, canvasJpeg.width, canvasJpeg.height);
+      ctxJpeg.drawImage(img, 0, 0);
+
+      const pending = { original: originalSize };
+      let done = 0;
+      const check = () => { if (++done === 3) setFormatSizes({ ...pending }); };
+
+      canvasJpeg.toBlob((b) => { pending.jpeg = b?.size ?? 0; check(); }, 'image/jpeg', q);
+      canvas.toBlob((b)     => { pending.png  = b?.size ?? 0; check(); }, 'image/png');
+      canvas.toBlob((b)     => { pending.webp = b?.size ?? 0; check(); }, 'image/webp', q);
+    };
+    img.src = imgSrc;
+  };
+
   const compress = async () => {
     if (!originalFile) return;
     setIsCompressing(true);
+    setFormatSizes({});
 
     try {
       const options = {
@@ -76,8 +123,10 @@ export default function App() {
       };
 
       const compressed = await imageCompression(originalFile, options);
+      const previewUrl = URL.createObjectURL(compressed);
       setCompressedFile(compressed);
-      setCompressedPreview(URL.createObjectURL(compressed));
+      setCompressedPreview(previewUrl);
+      measureFormatSizes(previewUrl, compressed.size, quality / 100);
     } catch (err) {
       console.error(err);
     } finally {
@@ -87,12 +136,45 @@ export default function App() {
 
   const handleDownload = () => {
     if (!compressedFile) return;
-    const ext = originalFile.name.split('.').pop();
+
     const baseName = originalFile.name.replace(/\.[^.]+$/, '');
-    const link = document.createElement('a');
-    link.href = compressedPreview;
-    link.download = `${baseName}_compressed.${ext}`;
-    link.click();
+    const isOriginal = downloadFormat === 'original';
+
+    if (isOriginal) {
+      const origExt = originalFile.name.split('.').pop();
+      const link = document.createElement('a');
+      link.href = compressedPreview;
+      link.download = `${baseName}_compressed.${origExt}`;
+      link.click();
+      return;
+    }
+
+    const mimeMap = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+    const extMap  = { jpeg: 'jpg', png: 'png', webp: 'webp' };
+    const mime = mimeMap[downloadFormat];
+    const ext  = extMap[downloadFormat];
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (downloadFormat === 'jpeg') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${baseName}_compressed.${ext}`;
+        link.click();
+        URL.revokeObjectURL(url);
+      }, mime, quality / 100);
+    };
+    img.src = compressedPreview;
   };
 
   const saving = getSavingPercent(originalFile?.size, compressedFile?.size);
@@ -238,9 +320,25 @@ export default function App() {
                     <span>{formatBytes(compressedFile.size)}</span>
                   </div>
                 </div>
-                <button className="btn-download" onClick={handleDownload}>
-                  ⬇ 다운로드
-                </button>
+                <div className="format-download">
+                  <div className="format-selector">
+                    {FORMATS.map((f) => (
+                      <button
+                        key={f.id}
+                        className={`format-btn ${downloadFormat === f.id ? 'active' : ''}`}
+                        onClick={() => setDownloadFormat(f.id)}
+                      >
+                        <span className="format-btn-label">{f.label}</span>
+                        {formatSizes[f.id] != null && (
+                          <span className="format-btn-size">{formatBytes(formatSizes[f.id])}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="btn-download" onClick={handleDownload}>
+                    ⬇ 다운로드
+                  </button>
+                </div>
               </div>
             )}
           </>
