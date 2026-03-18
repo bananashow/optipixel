@@ -20,7 +20,7 @@ export default function App() {
   const [originalPreview, setOriginalPreview] = useState(null);
   const [compressedFile, setCompressedFile] = useState(null);
   const [compressedPreview, setCompressedPreview] = useState(null);
-  const [quality, setQuality] = useState(80);
+  const [quality, setQuality] = useState(50);
   const [isCompressing, setIsCompressing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [imageDimensions, setImageDimensions] = useState(null);
