@@ -705,7 +705,9 @@ export default function App() {
             {doneItems.length > 0 && (
               <div className="action-bar">
                 <div className="action-bar-summary">
-                  <span className="saving-percent">-{totalSaving}%</span>
+                  <span className={`saving-percent${totalSaving < 0 ? ' saving-percent--warn' : ''}`}>
+                    {totalSaving < 0 ? `+${Math.abs(totalSaving)}` : `-${totalSaving}`}%
+                  </span>
                   <span className="saving-detail">
                     {formatBytes(totalOriginalSize)} → {formatBytes(totalCompressedSize)}
                     <span className="saving-count"> · {doneItems.length}개 완료</span>

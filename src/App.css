@@ -411,6 +411,10 @@ body {
   white-space: nowrap;
 }
 
+.saving-percent--warn {
+  color: #fbbf24;
+}
+
 .saving-detail {
   font-size: 0.82rem;
   color: #4b5563;
