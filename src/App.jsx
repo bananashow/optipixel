@@ -3,6 +3,7 @@ import imageCompression from 'browser-image-compression';
 import JSZip from 'jszip';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
+import PreviewModal from './PreviewModal';
 import './App.css';
 
 function formatBytes(bytes) {
@@ -115,26 +116,35 @@ function getFFmpegBase() {
   return ffmpegCoreBase;
 }
 
-// FFmpeg singleton — 비디오는 직렬 처리로 메모리 효율 확보
-let ffmpegInstance    = null;
-let ffmpegLoadPromise = null;
+const MAX_VIDEO_CONCURRENCY = 2;
 
+// 동시 실행 수를 limit 개로 제한하는 헬퍼
+function withConcurrency(items, limit, fn) {
+  const queue = items.slice();
+  async function worker() {
+    while (queue.length > 0) await fn(queue.shift());
+  }
+  return Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker)
+  );
+}
+
+// 비디오당 독립 인스턴스 생성 (병렬 처리용)
+async function createFFmpegInstance() {
+  const ffmpeg = new FFmpeg();
+  const base   = getFFmpegBase();
+  await ffmpeg.load({
+    coreURL: `${base}/ffmpeg/ffmpeg-core.js`,
+    wasmURL: `${base}/ffmpeg/ffmpeg-core.wasm`,
+  });
+  return ffmpeg;
+}
+
+// preload 전용 싱글턴 (UI "로딩 중" 표시 목적)
+let ffmpegPreloadPromise = null;
 function loadFFmpeg() {
-  if (ffmpegInstance)    return Promise.resolve(ffmpegInstance);
-  if (ffmpegLoadPromise) return ffmpegLoadPromise;
-
-  ffmpegLoadPromise = (async () => {
-    const ffmpeg = new FFmpeg();
-    const base   = getFFmpegBase();
-    await ffmpeg.load({
-      coreURL: `${base}/ffmpeg/ffmpeg-core.js`,
-      wasmURL: `${base}/ffmpeg/ffmpeg-core.wasm`,
-    });
-    ffmpegInstance = ffmpeg;
-    return ffmpeg;
-  })();
-
-  return ffmpegLoadPromise;
+  if (!ffmpegPreloadPromise) ffmpegPreloadPromise = createFFmpegInstance();
+  return ffmpegPreloadPromise;
 }
 
 export default function App() {
@@ -144,12 +154,26 @@ export default function App() {
   const [isZipping, setIsZipping]       = useState(false);
   const [isDragging, setIsDragging]     = useState(false);
   const [ffmpegReady, setFfmpegReady]   = useState(false);
+
+  const [previewItem, setPreviewItem] = useState(null);
+
   const fileInputRef = useRef(null);
 
   // Preload FFmpeg in background
   useEffect(() => {
     loadFFmpeg().then(() => setFfmpegReady(true)).catch(() => {});
   }, []);
+
+  const openPreview  = useCallback((item) => setPreviewItem(item), []);
+  const closePreview = useCallback(() => setPreviewItem(null), []);
+
+  const applyItemQuality = useCallback((id, q) => {
+    setItems(prev => prev.map(it => it.id === id ? { ...it, customQuality: q } : it));
+    setPreviewItem(null);
+  }, []);
+
+  const resetItemQuality = (id) =>
+    setItems(prev => prev.map(it => it.id === id ? { ...it, customQuality: null } : it));
 
   const addFiles = useCallback((fileList) => {
     const newItems = [];
@@ -162,6 +186,7 @@ export default function App() {
           originalPreview, dimensions: null,
           compressedFile: null, compressedPreview: null,
           formatSizes: {}, status: 'idle', progress: null, duration: null,
+          customQuality: null,
         };
         const img = new Image();
         img.onload = () => {
@@ -250,12 +275,13 @@ export default function App() {
     // ── Images (병렬 처리) ──
     await Promise.all(imageItems.map(async (item) => {
       try {
+        const q = (item.customQuality ?? quality) / 100;
         const options = {
-          maxSizeMB: (item.file.size / 1024 / 1024) * (quality / 100),
+          maxSizeMB: (item.file.size / 1024 / 1024) * q,
           maxWidthOrHeight: Math.max(item.dimensions?.width || 9999, item.dimensions?.height || 9999),
           useWebWorker: true,
           alwaysKeepResolution: true,
-          initialQuality: quality / 100,
+          initialQuality: q,
           fileType: item.file.type,
         };
         const compressed = await imageCompression(item.file, options);
@@ -265,7 +291,7 @@ export default function App() {
             ? { ...it, compressedFile: compressed, compressedPreview: previewUrl, status: 'done' }
             : it
         ));
-        measureFormatSizes(item.id, previewUrl, compressed.size, quality / 100);
+        measureFormatSizes(item.id, previewUrl, compressed.size, q);
       } catch (err) {
         console.error(err);
         setItems(prev => prev.map(it =>
@@ -274,30 +300,20 @@ export default function App() {
       }
     }));
 
-    // ── Videos (직렬 처리 — FFmpeg WASM 메모리 효율) ──
+    // ── Videos (MAX_VIDEO_CONCURRENCY 개 동시 처리) ──
     if (videoItems.length > 0) {
-      let ffmpeg;
-      try {
-        ffmpeg = await loadFFmpeg();
-        setFfmpegReady(true);
-      } catch (err) {
-        console.error('FFmpeg 로드 실패:', err);
-        setItems(prev => prev.map(it =>
-          videoItems.find(v => v.id === it.id) ? { ...it, status: 'error' } : it
-        ));
-        return;
-      }
-
-      // quality 10 → CRF 38 / quality 50 → CRF 29 / quality 99 → CRF 18
-      const crf = Math.round(40 - (quality / 100) * 22);
-
-      for (const item of videoItems) {
+      await withConcurrency(videoItems, MAX_VIDEO_CONCURRENCY, async (item) => {
+        // quality 10 → CRF 38 / quality 50 → CRF 29 / quality 99 → CRF 18
+        const crf = Math.round(40 - ((item.customQuality ?? quality) / 100) * 22);
+        let ffmpeg = null;
         const ext        = item.file.name.split('.').pop().toLowerCase() || 'mp4';
         const inputName  = `in_${item.id}.${ext}`;
         const outputName = `out_${item.id}.mp4`;
         let progressHandler = null;
 
         try {
+          ffmpeg = await createFFmpegInstance();
+
           await ffmpeg.writeFile(inputName, await fetchFile(item.file));
 
           progressHandler = ({ progress }) => {
@@ -337,14 +353,16 @@ export default function App() {
           ));
         } catch (err) {
           console.error('동영상 압축 오류:', err);
-          if (progressHandler) ffmpeg.off('progress', progressHandler);
-          try { await ffmpeg.deleteFile(inputName);  } catch {}
-          try { await ffmpeg.deleteFile(outputName); } catch {}
+          if (ffmpeg && progressHandler) ffmpeg.off('progress', progressHandler);
+          if (ffmpeg) {
+            try { await ffmpeg.deleteFile(inputName);  } catch {}
+            try { await ffmpeg.deleteFile(outputName); } catch {}
+          }
           setItems(prev => prev.map(it =>
             it.id === item.id ? { ...it, status: 'error' } : it
           ));
         }
-      }
+      });
     }
   };
 
@@ -489,20 +507,20 @@ export default function App() {
             <div className="controls-bar">
               <div className="quality-control">
                 <label>
-                  압축 품질
-                  <span className="quality-value">{quality}%</span>
+                  압축률
+                  <span className="quality-value">{100 - quality}%</span>
                 </label>
                 <input
                   type="range"
-                  min={10}
-                  max={99}
-                  value={quality}
-                  onChange={e => setQuality(Number(e.target.value))}
+                  min={1}
+                  max={90}
+                  value={100 - quality}
+                  onChange={e => setQuality(100 - Number(e.target.value))}
                   className="quality-slider"
                 />
                 <div className="quality-labels">
-                  <span>최대 압축</span>
-                  <span>최고 품질</span>
+                  <span>화질 우선</span>
+                  <span>용량 우선</span>
                 </div>
               </div>
               <div className="controls-actions">
@@ -589,6 +607,28 @@ export default function App() {
                     {item.status === 'error' && (
                       <div className="file-card-badge file-card-badge--error">오류</div>
                     )}
+
+                    {/* 커스텀 품질 배지 (클릭 시 초기화) */}
+                    {item.customQuality !== null && item.status !== 'compressing' && (
+                      <button
+                        className="file-card-quality-badge"
+                        onClick={(e) => { e.stopPropagation(); resetItemQuality(item.id); }}
+                        title="클릭하여 글로벌 설정으로 초기화"
+                      >
+                        압축 {100 - item.customQuality}%
+                      </button>
+                    )}
+
+                    {/* 이미지 미리보기 버튼 */}
+                    {item.mediaType === 'image' && item.status !== 'compressing' && (
+                      <button
+                        className="file-card-preview-btn"
+                        onClick={(e) => { e.stopPropagation(); openPreview(item); }}
+                        title="품질 미리보기"
+                      >
+                        👁
+                      </button>
+                    )}
                   </div>
 
                   <div className="file-card-info">
@@ -651,6 +691,15 @@ export default function App() {
           </>
         )}
       </main>
+
+      {/* 품질 미리보기 모달 */}
+      {previewItem && (
+        <PreviewModal
+          item={previewItem}
+          onClose={closePreview}
+          onApply={(q) => applyItemQuality(previewItem.id, q)}
+        />
+      )}
     </div>
   );
 }
