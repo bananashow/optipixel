@@ -1,9 +1,10 @@
 import { useState, useRef, useCallback } from 'react';
 import imageCompression from 'browser-image-compression';
+import JSZip from 'jszip';
 import './App.css';
 
 function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
+  if (!bytes || bytes === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -15,71 +16,84 @@ function getSavingPercent(original, compressed) {
   return Math.round((1 - compressed / original) * 100);
 }
 
-export default function App() {
-  const [originalFile, setOriginalFile] = useState(null);
-  const [originalPreview, setOriginalPreview] = useState(null);
-  const [compressedFile, setCompressedFile] = useState(null);
-  const [compressedPreview, setCompressedPreview] = useState(null);
-  const [quality, setQuality] = useState(50);
-  const [downloadFormat, setDownloadFormat] = useState('original');
-  const [formatSizes, setFormatSizes] = useState({});
-  const [isCompressing, setIsCompressing] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [imageDimensions, setImageDimensions] = useState(null);
-  const fileInputRef = useRef(null);
+function uid() {
+  return Math.random().toString(36).slice(2, 9);
+}
 
-  const getOriginalExt = (file) => {
-    if (!file) return '원본';
-    const mime = file.type;
-    if (mime === 'image/jpeg') return 'JPG';
-    if (mime === 'image/png')  return 'PNG';
-    if (mime === 'image/webp') return 'WebP';
-    return file.name.split('.').pop().toUpperCase();
-  };
+function getExtLabel(file) {
+  if (!file) return '원본';
+  if (file.type === 'image/jpeg') return 'JPG';
+  if (file.type === 'image/png')  return 'PNG';
+  if (file.type === 'image/webp') return 'WebP';
+  return file.name.split('.').pop().toUpperCase();
+}
 
-  const FORMATS = [
-    { id: 'original', label: getOriginalExt(originalFile) },
-    { id: 'jpeg',     label: 'JPG'  },
-    { id: 'png',      label: 'PNG'  },
-    { id: 'webp',     label: 'WebP' },
-  ];
-
-  const handleFile = useCallback((file) => {
-    if (!file || !file.type.startsWith('image/')) return;
-
-    setOriginalFile(file);
-    setCompressedFile(null);
-    setCompressedPreview(null);
-
-    const url = URL.createObjectURL(file);
-    setOriginalPreview(url);
-
+function convertToFormat(src, format, q) {
+  return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
-      setImageDimensions({ width: img.naturalWidth, height: img.naturalHeight });
+      const canvas = document.createElement('canvas');
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (format === 'jpeg') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(resolve, `image/${format}`, q);
     };
-    img.src = url;
+    img.src = src;
+  });
+}
+
+const STATIC_FORMATS = [
+  { id: 'jpeg', label: 'JPG'  },
+  { id: 'png',  label: 'PNG'  },
+  { id: 'webp', label: 'WebP' },
+];
+
+export default function App() {
+  const [items, setItems] = useState([]);
+  const [quality, setQuality] = useState(50);
+  const [downloadFormat, setDownloadFormat] = useState('original');
+  const [isZipping, setIsZipping] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const addFiles = useCallback((fileList) => {
+    const newItems = Array.from(fileList)
+      .filter(f => f.type.startsWith('image/'))
+      .map(file => {
+        const originalPreview = URL.createObjectURL(file);
+        const item = {
+          id: uid(),
+          file,
+          originalPreview,
+          dimensions: null,
+          compressedFile: null,
+          compressedPreview: null,
+          formatSizes: {},
+          status: 'idle',
+        };
+        const img = new Image();
+        img.onload = () => {
+          setItems(prev => prev.map(it =>
+            it.id === item.id
+              ? { ...it, dimensions: { width: img.naturalWidth, height: img.naturalHeight } }
+              : it
+          ));
+        };
+        img.src = originalPreview;
+        return item;
+      });
+    setItems(prev => [...prev, ...newItems]);
   }, []);
 
-  const handleDrop = useCallback((e) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    handleFile(file);
-  }, [handleFile]);
+  const removeItem = (id) => setItems(prev => prev.filter(it => it.id !== id));
+  const clearAll = () => setItems([]);
 
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => setIsDragging(false);
-
-  const handleInputChange = (e) => {
-    handleFile(e.target.files[0]);
-  };
-
-  const measureFormatSizes = (imgSrc, originalSize, q) => {
+  const measureFormatSizes = useCallback((id, imgSrc, originalSize, q) => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
@@ -91,93 +105,144 @@ export default function App() {
       const canvasJpeg = document.createElement('canvas');
       canvasJpeg.width  = img.naturalWidth;
       canvasJpeg.height = img.naturalHeight;
-      const ctxJpeg = canvasJpeg.getContext('2d');
-      ctxJpeg.fillStyle = '#ffffff';
-      ctxJpeg.fillRect(0, 0, canvasJpeg.width, canvasJpeg.height);
-      ctxJpeg.drawImage(img, 0, 0);
+      const ctxJ = canvasJpeg.getContext('2d');
+      ctxJ.fillStyle = '#ffffff';
+      ctxJ.fillRect(0, 0, canvasJpeg.width, canvasJpeg.height);
+      ctxJ.drawImage(img, 0, 0);
 
-      const pending = { original: originalSize };
+      const sizes = { original: originalSize };
       let done = 0;
-      const check = () => { if (++done === 3) setFormatSizes({ ...pending }); };
-
-      canvasJpeg.toBlob((b) => { pending.jpeg = b?.size ?? 0; check(); }, 'image/jpeg', q);
-      canvas.toBlob((b)     => { pending.png  = b?.size ?? 0; check(); }, 'image/png');
-      canvas.toBlob((b)     => { pending.webp = b?.size ?? 0; check(); }, 'image/webp', q);
+      const check = () => {
+        if (++done === 3) {
+          setItems(prev => prev.map(it => it.id === id ? { ...it, formatSizes: { ...sizes } } : it));
+        }
+      };
+      canvasJpeg.toBlob(b => { sizes.jpeg = b?.size ?? 0; check(); }, 'image/jpeg', q);
+      canvas.toBlob(b     => { sizes.png  = b?.size ?? 0; check(); }, 'image/png');
+      canvas.toBlob(b     => { sizes.webp = b?.size ?? 0; check(); }, 'image/webp', q);
     };
     img.src = imgSrc;
-  };
+  }, []);
 
-  const compress = async () => {
-    if (!originalFile) return;
-    setIsCompressing(true);
-    setFormatSizes({});
+  const compressAll = async () => {
+    const toCompress = items.filter(it => it.status !== 'compressing');
+    setItems(prev => prev.map(it =>
+      toCompress.find(i => i.id === it.id)
+        ? { ...it, status: 'compressing', compressedFile: null, compressedPreview: null, formatSizes: {} }
+        : it
+    ));
 
-    try {
-      const options = {
-        maxSizeMB: (originalFile.size / 1024 / 1024) * (quality / 100),
-        maxWidthOrHeight: Math.max(imageDimensions?.width || 9999, imageDimensions?.height || 9999),
-        useWebWorker: true,
-        alwaysKeepResolution: true,
-        initialQuality: quality / 100,
-        fileType: originalFile.type,
-      };
-
-      const compressed = await imageCompression(originalFile, options);
-      const previewUrl = URL.createObjectURL(compressed);
-      setCompressedFile(compressed);
-      setCompressedPreview(previewUrl);
-      measureFormatSizes(previewUrl, compressed.size, quality / 100);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsCompressing(false);
+    for (const item of toCompress) {
+      try {
+        const options = {
+          maxSizeMB: (item.file.size / 1024 / 1024) * (quality / 100),
+          maxWidthOrHeight: Math.max(item.dimensions?.width || 9999, item.dimensions?.height || 9999),
+          useWebWorker: true,
+          alwaysKeepResolution: true,
+          initialQuality: quality / 100,
+          fileType: item.file.type,
+        };
+        const compressed = await imageCompression(item.file, options);
+        const previewUrl = URL.createObjectURL(compressed);
+        setItems(prev => prev.map(it =>
+          it.id === item.id
+            ? { ...it, compressedFile: compressed, compressedPreview: previewUrl, status: 'done' }
+            : it
+        ));
+        measureFormatSizes(item.id, previewUrl, compressed.size, quality / 100);
+      } catch (err) {
+        console.error(err);
+        setItems(prev => prev.map(it =>
+          it.id === item.id ? { ...it, status: 'error' } : it
+        ));
+      }
     }
   };
 
-  const handleDownload = () => {
-    if (!compressedFile) return;
-
-    const baseName = originalFile.name.replace(/\.[^.]+$/, '');
-    const isOriginal = downloadFormat === 'original';
-
-    if (isOriginal) {
-      const origExt = originalFile.name.split('.').pop();
+  const downloadSingle = async (item) => {
+    if (!item.compressedFile) return;
+    const baseName = item.file.name.replace(/\.[^.]+$/, '');
+    if (downloadFormat === 'original') {
+      const ext = item.file.name.split('.').pop();
       const link = document.createElement('a');
-      link.href = compressedPreview;
-      link.download = `${baseName}_compressed.${origExt}`;
+      link.href = item.compressedPreview;
+      link.download = `${baseName}_compressed.${ext}`;
       link.click();
       return;
     }
-
-    const mimeMap = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
-    const extMap  = { jpeg: 'jpg', png: 'png', webp: 'webp' };
-    const mime = mimeMap[downloadFormat];
-    const ext  = extMap[downloadFormat];
-
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width  = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      if (downloadFormat === 'jpeg') {
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
-      ctx.drawImage(img, 0, 0);
-      canvas.toBlob((blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `${baseName}_compressed.${ext}`;
-        link.click();
-        URL.revokeObjectURL(url);
-      }, mime, quality / 100);
-    };
-    img.src = compressedPreview;
+    const extMap = { jpeg: 'jpg', png: 'png', webp: 'webp' };
+    const blob = await convertToFormat(item.compressedPreview, downloadFormat, quality / 100);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${baseName}_compressed.${extMap[downloadFormat]}`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
-  const saving = getSavingPercent(originalFile?.size, compressedFile?.size);
+  const downloadZip = async () => {
+    const doneItems = items.filter(it => it.status === 'done' && it.compressedFile);
+    if (!doneItems.length) return;
+    setIsZipping(true);
+    try {
+      const zip = new JSZip();
+      const extMap = { jpeg: 'jpg', png: 'png', webp: 'webp' };
+      for (const item of doneItems) {
+        let blob;
+        let ext;
+        if (downloadFormat === 'original') {
+          blob = item.compressedFile;
+          ext  = item.file.name.split('.').pop();
+        } else {
+          blob = await convertToFormat(item.compressedPreview, downloadFormat, quality / 100);
+          ext  = extMap[downloadFormat];
+        }
+        const baseName = item.file.name.replace(/\.[^.]+$/, '');
+        zip.file(`${baseName}_compressed.${ext}`, blob);
+      }
+      const content = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(content);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'optipixel_compressed.zip';
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsZipping(false);
+    }
+  };
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    addFiles(e.dataTransfer.files);
+  }, [addFiles]);
+
+  const handleDragOver  = (e) => { e.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = () => setIsDragging(false);
+  const handleInputChange = (e) => { addFiles(e.target.files); e.target.value = ''; };
+
+  const doneItems        = items.filter(it => it.status === 'done');
+  const isCompressingAny = items.some(it => it.status === 'compressing');
+
+  const allSameExt = items.length > 0 && items.every(it => getExtLabel(it.file) === getExtLabel(items[0].file));
+  const originalFormatLabel = allSameExt ? getExtLabel(items[0]?.file) : '원본';
+
+  const FORMATS = [
+    { id: 'original', label: originalFormatLabel },
+    ...STATIC_FORMATS,
+  ];
+
+  const totalFormatSizes = doneItems.reduce((acc, item) => {
+    Object.entries(item.formatSizes).forEach(([fmt, size]) => {
+      acc[fmt] = (acc[fmt] || 0) + size;
+    });
+    return acc;
+  }, {});
+
+  const totalOriginalSize   = items.reduce((s, it) => s + it.file.size, 0);
+  const totalCompressedSize = doneItems.reduce((s, it) => s + (it.compressedFile?.size || 0), 0);
+  const totalSaving         = getSavingPercent(totalOriginalSize, totalCompressedSize);
 
   return (
     <div className="app">
@@ -189,41 +254,36 @@ export default function App() {
 
       <main className="app-main">
         {/* 업로드 영역 */}
-        {!originalFile && (
-          <div
-            className={`drop-zone ${isDragging ? 'dragging' : ''}`}
-            onClick={() => fileInputRef.current.click()}
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-          >
-            <div className="drop-zone-icon">🖼️</div>
-            <p className="drop-zone-title">이미지를 드래그하거나 클릭해서 업로드</p>
-            <p className="drop-zone-sub">JPG, PNG, WebP 지원</p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleInputChange}
-              hidden
-            />
-          </div>
-        )}
+        <div
+          className={`drop-zone ${items.length > 0 ? 'drop-zone--compact' : ''} ${isDragging ? 'dragging' : ''}`}
+          onClick={() => fileInputRef.current.click()}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+        >
+          {items.length === 0 ? (
+            <>
+              <div className="drop-zone-icon">🖼️</div>
+              <p className="drop-zone-title">이미지를 드래그하거나 클릭해서 업로드</p>
+              <p className="drop-zone-sub">JPG, PNG, WebP · 여러 장 동시 선택 가능</p>
+            </>
+          ) : (
+            <p className="drop-zone-add">+ 이미지 추가</p>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handleInputChange}
+            hidden
+          />
+        </div>
 
-        {/* 이미지 업로드 후 */}
-        {originalFile && (
+        {items.length > 0 && (
           <>
+            {/* 컨트롤 바 */}
             <div className="controls-bar">
-              <button className="btn-secondary" onClick={() => {
-                setOriginalFile(null);
-                setOriginalPreview(null);
-                setCompressedFile(null);
-                setCompressedPreview(null);
-                setImageDimensions(null);
-              }}>
-                ← 다른 이미지
-              </button>
-
               <div className="quality-control">
                 <label>
                   압축 품질
@@ -234,11 +294,7 @@ export default function App() {
                   min={10}
                   max={99}
                   value={quality}
-                  onChange={(e) => {
-                    setQuality(Number(e.target.value));
-                    setCompressedFile(null);
-                    setCompressedPreview(null);
-                  }}
+                  onChange={e => setQuality(Number(e.target.value))}
                   className="quality-slider"
                 />
                 <div className="quality-labels">
@@ -246,97 +302,92 @@ export default function App() {
                   <span>최고 품질</span>
                 </div>
               </div>
-
-              <button
-                className="btn-primary"
-                onClick={compress}
-                disabled={isCompressing}
-              >
-                {isCompressing ? (
-                  <><span className="spinner" /> 압축 중...</>
-                ) : '압축하기'}
-              </button>
-            </div>
-
-            {/* 미리보기 */}
-            <div className="preview-grid">
-              <div className="preview-card">
-                <div className="preview-label">원본</div>
-                <div className="preview-img-wrap">
-                  <img src={originalPreview} alt="원본" />
-                </div>
-                <div className="preview-info">
-                  <span className="file-size">{formatBytes(originalFile.size)}</span>
-                  {imageDimensions && (
-                    <span className="dimensions">{imageDimensions.width} × {imageDimensions.height}px</span>
-                  )}
-                </div>
-              </div>
-
-              <div className="preview-arrow">→</div>
-
-              <div className={`preview-card ${!compressedFile ? 'preview-card--empty' : ''}`}>
-                <div className="preview-label">압축 결과</div>
-                <div className="preview-img-wrap">
-                  {compressedPreview
-                    ? <img src={compressedPreview} alt="압축 결과" />
-                    : <div className="preview-placeholder">
-                        {isCompressing
-                          ? <><div className="loading-ring" /><p>압축 중...</p></>
-                          : <p>압축 후 결과가<br />여기에 표시됩니다</p>
-                        }
-                      </div>
-                  }
-                </div>
-                <div className="preview-info">
-                  {compressedFile && (
-                    <>
-                      <span className="file-size compressed">{formatBytes(compressedFile.size)}</span>
-                      {imageDimensions && (
-                        <span className="dimensions">{imageDimensions.width} × {imageDimensions.height}px</span>
-                      )}
-                    </>
-                  )}
-                </div>
+              <div className="controls-actions">
+                <button className="btn-primary" onClick={compressAll} disabled={isCompressingAny}>
+                  {isCompressingAny
+                    ? <><span className="spinner" /> 압축 중...</>
+                    : `전체 압축 (${items.length}장)`}
+                </button>
+                <button className="btn-ghost" onClick={clearAll} disabled={isCompressingAny}>
+                  초기화
+                </button>
               </div>
             </div>
 
-            {/* 결과 요약 */}
-            {compressedFile && (
-              <div className="result-summary">
-                <div className="saving-badge">
-                  <span className="saving-percent">-{saving}%</span>
-                  <span className="saving-label">용량 절감</span>
-                </div>
-                <div className="saving-bar-wrap">
-                  <div className="saving-bar">
-                    <div
-                      className="saving-bar-fill"
-                      style={{ width: `${100 - saving}%` }}
+            {/* 파일 그리드 */}
+            <div className="files-grid">
+              {items.map(item => (
+                <div key={item.id} className={`file-card file-card--${item.status}`}>
+                  <button className="file-card-remove" onClick={() => removeItem(item.id)}>×</button>
+                  <div className="file-card-img">
+                    <img
+                      src={item.compressedPreview || item.originalPreview}
+                      alt={item.file.name}
                     />
+                    {item.status === 'compressing' && (
+                      <div className="file-card-overlay">
+                        <div className="loading-ring" />
+                      </div>
+                    )}
+                    {item.status === 'done' && (
+                      <div className="file-card-badge">
+                        -{getSavingPercent(item.file.size, item.compressedFile.size)}%
+                      </div>
+                    )}
+                    {item.status === 'error' && (
+                      <div className="file-card-badge file-card-badge--error">오류</div>
+                    )}
                   </div>
-                  <div className="saving-bar-labels">
-                    <span>{formatBytes(originalFile.size)}</span>
-                    <span>{formatBytes(compressedFile.size)}</span>
+                  <div className="file-card-info">
+                    <p className="file-card-name" title={item.file.name}>{item.file.name}</p>
+                    <div className="file-card-sizes">
+                      <span className="size-original">{formatBytes(item.file.size)}</span>
+                      {item.status === 'done' && (
+                        <>
+                          <span className="size-arrow">→</span>
+                          <span className="size-compressed">{formatBytes(item.compressedFile.size)}</span>
+                        </>
+                      )}
+                    </div>
                   </div>
+                  {item.status === 'done' && (
+                    <button className="file-card-dl" onClick={() => downloadSingle(item)} title="개별 다운로드">
+                      ↓
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* 액션 바 */}
+            {doneItems.length > 0 && (
+              <div className="action-bar">
+                <div className="action-bar-summary">
+                  <span className="saving-percent">-{totalSaving}%</span>
+                  <span className="saving-detail">
+                    {formatBytes(totalOriginalSize)} → {formatBytes(totalCompressedSize)}
+                    <span className="saving-count"> · {doneItems.length}장 완료</span>
+                  </span>
                 </div>
                 <div className="format-download">
                   <div className="format-selector">
-                    {FORMATS.map((f) => (
+                    {FORMATS.map(f => (
                       <button
                         key={f.id}
                         className={`format-btn ${downloadFormat === f.id ? 'active' : ''}`}
                         onClick={() => setDownloadFormat(f.id)}
                       >
                         <span className="format-btn-label">{f.label}</span>
-                        {formatSizes[f.id] != null && (
-                          <span className="format-btn-size">{formatBytes(formatSizes[f.id])}</span>
+                        {totalFormatSizes[f.id] != null && (
+                          <span className="format-btn-size">{formatBytes(totalFormatSizes[f.id])}</span>
                         )}
                       </button>
                     ))}
                   </div>
-                  <button className="btn-download" onClick={handleDownload}>
-                    ⬇ 다운로드
+                  <button className="btn-download" onClick={downloadZip} disabled={isZipping}>
+                    {isZipping
+                      ? <><span className="spinner" /> 생성 중...</>
+                      : `⬇ ZIP (${doneItems.length}장)`}
                   </button>
                 </div>
               </div>
