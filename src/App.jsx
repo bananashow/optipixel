@@ -205,6 +205,7 @@ export default function App() {
           originalPreview: null, dimensions: null,
           compressedFile: null, compressedPreview: null,
           formatSizes: {}, status: 'idle', progress: null, duration: null,
+          customQuality: null,
         };
         newItems.push(item);
 
@@ -609,7 +610,7 @@ export default function App() {
                     )}
 
                     {/* 커스텀 품질 배지 (클릭 시 초기화) */}
-                    {item.customQuality !== null && item.status !== 'compressing' && (
+                    {item.customQuality != null && item.status !== 'compressing' && (
                       <button
                         className="file-card-quality-badge"
                         onClick={(e) => { e.stopPropagation(); resetItemQuality(item.id); }}

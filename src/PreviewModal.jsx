@@ -54,7 +54,8 @@ export default function PreviewModal({ item, onClose, onApply }) {
       cJpeg.width  = canvas.width;
       cJpeg.height = canvas.height;
       const ctxJ  = cJpeg.getContext('2d');
-      ctxJ.fillStyle = '#ffffff';
+      // comparator 배경색으로 채워 투명 픽셀이 흰 테두리로 보이는 현상 방지
+      ctxJ.fillStyle = '#0a0a0f';
       ctxJ.fillRect(0, 0, cJpeg.width, cJpeg.height);
       ctxJ.drawImage(img, 0, 0);
 
@@ -198,13 +199,16 @@ export default function PreviewModal({ item, onClose, onApply }) {
           <img className="comparator-img" src={item.originalPreview} alt="원본" draggable={false} />
 
           {blobUrl && (
-            <img
-              className="comparator-img"
-              src={blobUrl}
-              alt="압축 미리보기"
-              draggable={false}
-              style={{ clipPath: `inset(0 0 0 ${sliderPos}%)` }}
-            />
+            <div
+              style={{ position: 'absolute', inset: 0, clipPath: `inset(0 0 0 ${sliderPos}%)` }}
+            >
+              <img
+                className="comparator-img"
+                src={blobUrl}
+                alt="압축 미리보기"
+                draggable={false}
+              />
+            </div>
           )}
 
           {isGenerating && (
